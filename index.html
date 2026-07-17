@@ -217,6 +217,19 @@ body{font-family:'DM Sans',system-ui,sans-serif;background:var(--bg);color:var(-
 .bonus-note{font-size:11px;color:var(--ink2);font-style:italic;margin-top:2px;line-height:1.4}
 .bonus-del{position:absolute;top:8px;right:9px;font-size:12px;cursor:pointer;color:var(--ink4)}
 .bonus-del:hover{color:var(--rd)}
+
+/* FIREBASE AUTH */
+.auth-screen{position:fixed;inset:0;z-index:9999;background:#111;display:flex;align-items:center;justify-content:center;padding:20px;font-family:'DM Sans',system-ui,sans-serif}
+.auth-box{width:min(390px,100%);background:#fff;border-radius:18px;padding:24px;box-shadow:0 24px 70px rgba(0,0,0,.45)}
+.auth-logo{font-size:22px;font-weight:800;margin-bottom:4px}.auth-logo span{color:#c97c09}
+.auth-sub{font-size:12px;color:#666;margin-bottom:18px}
+.auth-input{width:100%;padding:11px 12px;border:1.5px solid #ccc9c0;border-radius:9px;font:14px 'DM Sans',sans-serif;margin-bottom:9px}
+.auth-input:focus{outline:none;border-color:#c97c09}
+.auth-primary,.auth-google{width:100%;padding:11px;border:none;border-radius:9px;font:700 13px 'DM Sans',sans-serif;cursor:pointer}
+.auth-primary{background:#111;color:#fff}.auth-google{margin-top:8px;background:#fff;border:1.5px solid #ccc9c0;color:#222}
+.auth-error{min-height:18px;margin-top:9px;color:#b02020;font-size:11px;line-height:1.4}
+.auth-wait{text-align:center;font-size:13px;color:#555;padding:10px}
+
 </style>
 </head>
 <body>
@@ -247,70 +260,90 @@ body{font-family:'DM Sans',system-ui,sans-serif;background:var(--bg);color:var(-
 <div id="mc"></div>
 <div class="toast" id="toast"></div>
 
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 <script>
 /* ══════════════════════════════════════
-   API — połączenie z Google Apps Script
+   FIREBASE — logowanie i baza Firestore
 ══════════════════════════════════════ */
-const API_URL   = 'https://script.google.com/macros/s/AKfycbxFxhe1wMSlbRRW4lOtlk29EZ74EQ24gOMVd8wF5cF4Q6HVtkyX8TvNK7pX3e-ZByKKpQ/exec';
-const API_TOKEN = 'pkig2026secret';
-const USE_API   = true; // false = tryb demo (dane w pamięci)
+const firebaseConfig = {
+  apiKey: "AIzaSyDVjl5wA5LCeGFGCdilbS_hrJ70bIz-iyk",
+  authDomain: "pkig-czas-pracy-app.firebaseapp.com",
+  projectId: "pkig-czas-pracy-app",
+  storageBucket: "pkig-czas-pracy-app.firebasestorage.app",
+  messagingSenderId: "879452165422",
+  appId: "1:879452165422:web:fe1d317bc82f9517b396bf"
+};
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+const USE_API = false;
+async function apiPost(){ return null; }
 
-async function apiGet(action, params={}){
-  if(!USE_API) return null;
-  try{
-    const qs = new URLSearchParams({action, token:API_TOKEN, ...params}).toString();
-    const res = await fetch(API_URL + '?' + qs);
-    return await res.json();
-  }catch(e){ console.error('API GET error:', e); return null; }
+let CURRENT_USER = null;
+let CURRENT_PROFILE = null;
+
+function authMessage_(message=''){
+  let screen=document.getElementById('auth-screen');
+  if(!screen){screen=document.createElement('div');screen.id='auth-screen';screen.className='auth-screen';document.body.appendChild(screen);}
+  screen.innerHTML=`<div class="auth-box">
+    <div class="auth-logo">PK<span>IG</span> · Konsola</div>
+    <div class="auth-sub">Dostęp dla zarządu, HR i kierowników</div>
+    <input id="auth-email" class="auth-input" type="email" autocomplete="username" placeholder="Adres e-mail" value="test.pracownik@pkig.com.pl">
+    <input id="auth-password" class="auth-input" type="password" autocomplete="current-password" placeholder="Hasło">
+    <button class="auth-primary" onclick="loginEmail()">Zaloguj się</button>
+    <button class="auth-google" onclick="loginGoogle()">Zaloguj kontem Google</button>
+    <div class="auth-error" id="auth-error">${message||''}</div>
+  </div>`;
 }
-
-async function apiPost(action, data){
-  if(!USE_API) return null;
-  try{
-    const res = await fetch(API_URL, {
-      method:'POST',
-      headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body: JSON.stringify({action, token:API_TOKEN, data})
-    });
-    return await res.json();
-  }catch(e){ console.error('API POST error:', e); return null; }
+function authWait_(message='Sprawdzam uprawnienia...'){
+  let screen=document.getElementById('auth-screen');if(!screen){screen=document.createElement('div');screen.id='auth-screen';screen.className='auth-screen';document.body.appendChild(screen);}
+  screen.innerHTML=`<div class="auth-box"><div class="auth-logo">PK<span>IG</span> · Konsola</div><div class="auth-wait">${message}</div></div>`;
 }
+function hideAuth_(){document.getElementById('auth-screen')?.remove();}
+function authErrorText_(e){const c=e?.code||'';if(c.includes('invalid-credential')||c.includes('wrong-password')||c.includes('user-not-found'))return'Nieprawidłowy login lub hasło.';if(c.includes('unauthorized-domain'))return'Ta domena nie jest jeszcze dopuszczona w Firebase Authentication.';return e?.message||'Nie udało się zalogować.';}
+async function loginEmail(){const email=document.getElementById('auth-email')?.value.trim(),password=document.getElementById('auth-password')?.value||'',err=document.getElementById('auth-error');if(!email||!password){if(err)err.textContent='Wpisz adres e-mail i hasło.';return;}try{if(err)err.textContent='Logowanie...';await auth.signInWithEmailAndPassword(email,password);}catch(e){if(err)err.textContent=authErrorText_(e);}}
+async function loginGoogle(){const err=document.getElementById('auth-error');try{if(err)err.textContent='Otwieram logowanie Google...';await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider());}catch(e){if(err)err.textContent=authErrorText_(e);}}
+async function logoutFirebase(){await auth.signOut();}
 
-/* Ładowanie wszystkich danych z serwera przy starcie konsoli */
 async function loadAllFromServer(){
-  if(!USE_API) return;
-  try{
-    const [prac, wpisy, proj, url, prem, arch] = await Promise.all([
-      apiGet('getPracownicy'),
-      apiGet('getWpisy'),
-      apiGet('getProjekty'),
-      apiGet('getUrlopy'),
-      apiGet('getPremie'),
-      apiGet('getArchiwum'),
-    ]);
-    if(prac && Array.isArray(prac) && prac.length){
-      EMPLOYEES.length = 0;
-      prac.forEach(p=>EMPLOYEES.push(p));
-    }
-    if(wpisy && Array.isArray(wpisy)){
-      ENTRIES.length = 0;
-      wpisy.forEach(w=>ENTRIES.push(w));
-    }
-    if(url && Array.isArray(url)){
-      LEAVES.length = 0;
-      url.forEach(l=>LEAVES.push(l));
-    }
-    if(prem && Array.isArray(prem)){
-      BONUSES.length = 0;
-      prem.forEach(b=>BONUSES.push(b));
-    }
-    if(arch && typeof arch === 'object'){
-      Object.assign(PAYROLL_ARCHIVE, arch);
-    }
-    buildRoleSwitcher();
-    renderAll();
-  }catch(e){ console.error('Load error:', e); }
+  const [entriesSnap, leavesSnap] = await Promise.all([
+    db.collection('timeEntries').get(),
+    db.collection('leaves').get()
+  ]);
+  ENTRIES.length=0;
+  let seq=0;
+  entriesSnap.forEach(doc=>{const w=doc.data();ENTRIES.push({
+    _docId:doc.id,id:Number(w.id)||Date.now()+seq++,empId:Number(w.employeeId||w.empId||0),proj:w.proj||w.projectId||'',
+    date:w.date||'',start:w.start||'',end:w.end||'',hrs:Number(w.hrs||0),etap:w.etap||'biuro',note:w.note||'',
+    wyjazd:!!w.wyjazd,auto:!!w.auto,zdalna:!!w.zdalna,car:w.car||null,carOther:w.carOther||'',ustalenia:w.ustalenia||'',
+    weekendMult:w.weekendMult??null,dietaOv:w.dietaOv??null,status:w.status||'pending',changedBy:w.changedBy||null,changeNote:w.changeNote||''
+  });});
+  LEAVES.length=0;
+  leavesSnap.forEach(doc=>{const l=doc.data();LEAVES.push({_docId:doc.id,id:Number(l.id)||Date.now(),empId:Number(l.employeeId||l.empId||0),type:l.type,label:l.label||l.type,df:l.df,dt:l.dt,dni:Number(l.dni||0),opis:l.opis||'',status:l.status||'pending'});});
+  ENTRIES.sort((a,b)=>(b.date||'').localeCompare(a.date||'')||b.id-a.id);
+  renderAll();
 }
+
+async function startFirebaseSession_(user){
+  authWait_();
+  const profileDoc=await db.collection('users').doc(user.uid).get();
+  if(!profileDoc.exists){await auth.signOut();authMessage_('To konto nie ma profilu użytkownika konsoli.');return;}
+  const profile=profileDoc.data();
+  const allowed=['zarzad','hr','kierownik','z_kierownik'];
+  if(profile.active!==true||!allowed.includes(profile.role)){await auth.signOut();authMessage_('Brak uprawnień do konsoli PKIG.');return;}
+  CURRENT_USER=user;CURRENT_PROFILE=profile;
+  const full=`${profile.firstName||''} ${profile.lastName||''}`.trim()||user.email;
+  document.getElementById('tb-uname').textContent=full+' · '+profile.role;
+  document.getElementById('tb-av').textContent=((profile.firstName?.[0]||'')+(profile.lastName?.[0]||'')).toUpperCase()||'PK';
+  document.querySelector('.tb-user').style.cursor='pointer';document.querySelector('.tb-user').title='Kliknij, aby się wylogować';document.querySelector('.tb-user').onclick=()=>{if(confirm('Wylogować się?'))logoutFirebase();};
+  if(profile.role==='zarzad'){ROLE='zarzad';}
+  hideAuth_();
+  await loadAllFromServer();
+}
+
+window.addEventListener('load',()=>{auth.onAuthStateChanged(user=>{if(!user){CURRENT_USER=null;CURRENT_PROFILE=null;authMessage_();return;}startFirebaseSession_(user).catch(async e=>{console.error(e);await auth.signOut();authMessage_('Błąd uruchamiania konsoli: '+(e.message||e));});});});
 
 /* ══ CONSTANTS ══ */
 const SL=[
@@ -3448,9 +3481,44 @@ function getManagedDepts(){
   return u&&u.managedDepts&&u.managedDepts.length>0?u.managedDepts:[];
 }
 
+
+/* ══ FIRESTORE — akcje zatwierdzania ══ */
+function entryById_(id){return ENTRIES.find(e=>Number(e.id)===Number(id));}
+function updateEntryField(id,field,value){
+  const en=entryById_(id);if(!en)return;en[field]=value;
+  if(field==='start'||field==='end'){
+    const [sh,sm]=(en.start||'00:00').split(':').map(Number),[eh,em]=(en.end||'00:00').split(':').map(Number);
+    let mins=(eh*60+em)-(sh*60+sm);if(mins<0)mins+=1440;en.hrs=Math.round(mins/60*100)/100;
+  }
+  renderContent();
+}
+function toggleEntryBool(id,field){const en=entryById_(id);if(!en)return;en[field]=!en[field];}
+async function approveEntry(id){
+  const en=entryById_(id);if(!en||!en._docId)return;
+  try{await db.collection('timeEntries').doc(en._docId).update({status:'approved',approvedBy:CURRENT_USER.uid,approvedByName:`${CURRENT_PROFILE.firstName||''} ${CURRENT_PROFILE.lastName||''}`.trim(),approvedAt:firebase.firestore.FieldValue.serverTimestamp(),updatedAt:firebase.firestore.FieldValue.serverTimestamp()});en.status='approved';renderAll();showToast('Wpis zatwierdzony');}
+  catch(e){console.error(e);showToast('Błąd zatwierdzania: '+(e.message||e));}
+}
+async function rejectEntry(id){
+  const en=entryById_(id);if(!en||!en._docId)return;
+  const reason=prompt('Powód odrzucenia wpisu:','Wymaga poprawy');if(reason===null)return;
+  try{await db.collection('timeEntries').doc(en._docId).update({status:'rejected',rejectionReason:reason,changedBy:`${CURRENT_PROFILE.firstName||''} ${CURRENT_PROFILE.lastName||''}`.trim(),changeNote:reason,updatedAt:firebase.firestore.FieldValue.serverTimestamp()});en.status='rejected';en.changeNote=reason;renderAll();showToast('Wpis odrzucony');}
+  catch(e){console.error(e);showToast('Błąd odrzucania: '+(e.message||e));}
+}
+async function saveEntryChanges(id){
+  const en=entryById_(id);if(!en||!en._docId)return;
+  const changes={start:en.start,end:en.end,hrs:en.hrs,etap:en.etap,wyjazd:!!en.wyjazd,auto:!!en.auto,zdalna:!!en.zdalna,weekendMult:en.weekendMult??null,dietaOv:en.dietaOv??null,changeNote:en.changeNote||'',changedBy:`${CURRENT_PROFILE.firstName||''} ${CURRENT_PROFILE.lastName||''}`.trim(),updatedAt:firebase.firestore.FieldValue.serverTimestamp()};
+  try{await db.collection('timeEntries').doc(en._docId).update(changes);showToast('Zmiany zapisane');renderAll();}
+  catch(e){console.error(e);showToast('Błąd zapisu: '+(e.message||e));}
+}
+async function approveWeek(){
+  const pending=ENTRIES.filter(e=>e.status==='pending'&&canApprove(e.empId));
+  try{await Promise.all(pending.map(en=>db.collection('timeEntries').doc(en._docId).update({status:'approved',approvedBy:CURRENT_USER.uid,approvedAt:firebase.firestore.FieldValue.serverTimestamp(),updatedAt:firebase.firestore.FieldValue.serverTimestamp()})));pending.forEach(e=>e.status='approved');renderAll();showToast('Zatwierdzono wszystkie widoczne wpisy');}
+  catch(e){console.error(e);showToast('Nie zatwierdzono wszystkich wpisów');}
+}
+
 buildRoleSwitcher();
 setRole('zarzad',null);
-if(typeof USE_API!=='undefined' && USE_API) loadAllFromServer();
+
 </script>
 </body>
 </html>
